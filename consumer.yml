@@ -17,7 +17,10 @@ topology:
       utc_offset_hours: 1
 
 users:
-  count: 500
+  starting_count: 500
+  new_users_per_day: 100
+  # daily probability of churning (modified by persona)
+  base_churn_rate: 0.02
   internal_user_rate: 0.02
   countries:
     US: 0.70
@@ -165,8 +168,8 @@ journeys:
       end: 0.05
 
     intent:
-      browse: 0.40
-      checkout: 0.40
+      browse: 0.4
+      checkout: 0.4
       end: 0.2
 
     checkout:
@@ -176,8 +179,8 @@ journeys:
 
     payment:
       post_booking: 0.85
-      payment: 0.05    # retry / additional attempt
-      end: 0.10
+      payment: 0.05    # retry?
+      end: 0.1
 
     post_booking:
       post_booking: 0.15
@@ -197,9 +200,16 @@ feature_flags:
     effects:
       route_overrides:
         fraud.risk_score:
-          latency_multiplier: 1.15
+          latency_multiplier: 1.2
       fraud_decision:
-        extra_decline_rate: 0.04
+        extra_decline_rate: 0.05
+
+noise:
+  random_requests_rate: 0.2
+  random_error_rate: 0.2
+
+# 10% of standard work day traffic
+weekend_multiplier: 0.1
 
 output:
   out_dir: "./out"

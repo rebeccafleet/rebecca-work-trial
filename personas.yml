@@ -3,6 +3,7 @@ schema_version: 1
 personas:
   - id: regular
     share_of_users: 0.78
+    churn_multiplier: 1.0
 
     activity:
       request_rate_multiplier: 1.0
@@ -20,6 +21,7 @@ personas:
 
   - id: power_user
     share_of_users: 0.1
+    churn_multiplier: 0.3
 
     activity:
       request_rate_multiplier: 1.5
@@ -37,6 +39,7 @@ personas:
 
   - id: low_engagement
     share_of_users: 0.10
+    churn_multiplier: 2.5
 
     activity:
       request_rate_multiplier: 0.2
@@ -54,6 +57,7 @@ personas:
 
   - id: bot_like
     share_of_users: 0.02
+    churn_multiplier: 0.1        # bots don't churn, they get banned
 
     activity:
       request_rate_multiplier: 6.0
@@ -70,6 +74,7 @@ personas:
       malformed_log_rate: 0.01
 
 defaults:
+  churn_multiplier: 1.0
   activity:
     request_rate_multiplier: 1.0
     active_hours_pattern: always_on

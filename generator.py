@@ -75,7 +75,10 @@ def apply_latency_jitter(rng: np.random.Generator, base_latency: float, multipli
 
 
 class ApplicationLogGenerator:
-    """Generates realistic application logs based on consumer.yml and personas.yml."""
+    """
+    Creates realistic application logs based on consumer.yml and personas.yml.
+    Passed in as arguments to the script.
+    """
     
     def __init__(self, consumer_path: str, personas_path: str):
         with open(consumer_path, "r") as f:
@@ -114,6 +117,9 @@ class ApplicationLogGenerator:
         
         # Feature flags
         self.feature_flags = self.consumer.get("feature_flags", [])
+        
+        # Noise config
+        self.noise = self.consumer.get("noise", {})
         
     def _build_routes_by_stage(self) -> dict:
         """Group routes by their journey stage."""
@@ -178,29 +184,105 @@ class ApplicationLogGenerator:
             return None
         return next_stage
     
-    def generate_users(self) -> list:
-        """Generate user records."""
-        user_count = self.consumer["users"]["count"]
+    def _create_user(self, uid: int, created_at: datetime) -> dict:
         countries = self.consumer["users"]["countries"]
         internal_rate = self.consumer["users"].get("internal_user_rate", 0.02)
         
+        persona_id = self._pick_persona()
+        device_mix = self._get_persona_attr(persona_id, "identity", "device_mix") or {"web": 0.7, "mobile": 0.3}
+        
+        return {
+            "user_id": uid,
+            "created_at": created_at.isoformat(),
+            "churned_at": None,  # None = still active
+            "country": weighted_choice(self.rng, countries),
+            "persona": persona_id,
+            "is_internal": bool(self.rng.random() < internal_rate),
+            "device_primary": weighted_choice(self.rng, device_mix),
+        }
+    
+    def generate_starting_users(self) -> list:
+        starting_count = self.consumer["users"].get("starting_count", self.consumer["users"].get("count", 100))
+        
         users = []
-        for uid in range(1, user_count + 1):
-            persona_id = self._pick_persona()
-            device_mix = self._get_persona_attr(persona_id, "identity", "device_mix") or {"web": 0.7, "mobile": 0.3}
-            
-            created = self.start - timedelta(days=int(self.rng.integers(0, 90)))
-            
-            users.append({
-                "user_id": uid,
-                "created_at": created.isoformat(),
-                "country": weighted_choice(self.rng, countries),
-                "persona": persona_id,
-                "is_internal": bool(self.rng.random() < internal_rate),
-                "device_primary": weighted_choice(self.rng, device_mix),
-            })
+        for uid in range(1, starting_count + 1):
+            # Existing users were created sometime in the past
+            created = self.start - timedelta(days=int(self.rng.integers(1, 90)))
+            users.append(self._create_user(uid, created))
         
         return users
+    
+    def add_new_users(self, users: list, day: datetime, next_uid: int) -> int:
+        new_per_day = self.consumer["users"].get("new_users_per_day", 0)
+        
+        for _ in range(new_per_day):
+            # New user signs up at a random time during the day
+            signup_time = day + timedelta(seconds=sample_time_of_day(self.rng, "work_hours"))
+            users.append(self._create_user(next_uid, signup_time))
+            next_uid += 1
+        
+        return next_uid
+    
+    def apply_daily_churn(self, users: list, day: datetime) -> int:
+        """Apply churn to active users. Returns count of users who churned."""
+        base_churn = self.consumer["users"].get("base_churn_rate", 0.02)
+        churned_count = 0
+        
+        for user in users:
+            if user["churned_at"] is not None:
+                continue  # already churned
+            
+            # Get persona-specific churn multiplier
+            persona = self.personas.get(user["persona"], {})
+            churn_mult = persona.get("churn_multiplier", self.persona_defaults.get("churn_multiplier", 1.0))
+            
+            effective_churn_rate = base_churn * churn_mult
+            
+            if self.rng.random() < effective_churn_rate:
+                user["churned_at"] = day.isoformat()
+                churned_count += 1
+        
+        return churned_count
+    
+    def is_user_active(self, user: dict, day: datetime) -> bool:
+        created = datetime.fromisoformat(user["created_at"])
+        if created.date() > day.date():
+            return False  # not created yet
+        
+        if user["churned_at"] is not None:
+            churned = datetime.fromisoformat(user["churned_at"])
+            if churned.date() <= day.date():
+                return False  # already churned
+        
+        return True
+    
+    def generate_noise_requests(self, day_start: datetime, active_user_count: int) -> list:
+        """Generate random standalone API calls as noise."""
+        noise_pct = self.noise.get("random_requests_rate", 0.2)
+        noise_count = int(active_user_count * noise_pct)
+        error_rate = self.noise.get("random_error_rate", 0.2)
+        
+        logs = []
+        for _ in range(noise_count):
+            route = self.all_routes[int(self.rng.integers(0, len(self.all_routes)))]
+            region = self._pick_region()
+            ts = day_start + timedelta(seconds=int(self.rng.integers(0, 86400)))
+            
+            logs.append({
+                "request_id": str(uuid.uuid4()),
+                "timestamp": ts.isoformat(),
+                "user_id": None,
+                "session_id": "noise",
+                "service": route["service"],
+                "route_id": route["id"],
+                "method": route["method"],
+                "path": route["path"],
+                "status_code": generate_status_code(self.rng, error_rate),
+                "latency_ms": apply_latency_jitter(self.rng, route["base_latency_ms"]),
+                "region": region["id"],
+                "device": "unknown",
+            })
+        return logs
     
     def generate_session(self, user: dict, session_start: datetime) -> list:
         """Generate a user session as a sequence of log entries following a journey."""
@@ -278,10 +360,6 @@ class ApplicationLogGenerator:
                         "latency_ms": latency if not is_malformed else -1,
                         "region": region["id"],
                         "device": device,
-                        "persona": persona_id,
-                        "stage": current_stage,
-                        "attempt": attempt + 1,
-                        "is_malformed": is_malformed,
                     }
                     logs.append(log_entry)
                     
@@ -300,71 +378,95 @@ class ApplicationLogGenerator:
         return logs
     
     def generate(self):
-        """Main generation loop."""
+        starting_count = self.consumer["users"].get("starting_count", self.consumer["users"].get("count", 100))
+        new_per_day = self.consumer["users"].get("new_users_per_day", 0)
+        
         print(f"Generating application logs...")
         print(f"  Duration: {self.duration_days} days starting {self.start.date()}")
-        print(f"  Users: {self.consumer['users']['count']}")
+        print(f"  Starting users: {starting_count}, new/day: {new_per_day}")
         
-        # Generate users
-        users = self.generate_users()
-        users_csv = os.path.join(self.out_dir, "dim_users.csv")
-        with open(users_csv, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=["user_id", "created_at", "country", "persona", "is_internal", "device_primary"])
-            w.writeheader()
-            w.writerows(users)
-        print(f"  Generated {len(users)} users -> {users_csv}")
+        # Generate starting users
+        users = self.generate_starting_users()
+        next_uid = len(users) + 1
         
         # Generate application logs
         logs_csv = os.path.join(self.out_dir, "application_logs.csv")
         log_fields = [
             "request_id", "timestamp", "user_id", "session_id", "service", 
             "route_id", "method", "path", "status_code", "latency_ms",
-            "region", "device", "persona", "stage", "attempt", "is_malformed"
+            "region", "device"
         ]
         
         total_logs = 0
-        users_by_id = {u["user_id"]: u for u in users}
+        total_churned = 0
+        total_new = 0
         
         with open(logs_csv, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=log_fields)
             w.writeheader()
             
-            # For each day, generate sessions
+            # Generate sessions for each day
             for day_offset in range(self.duration_days):
                 day_start = self.start + timedelta(days=day_offset)
                 day_logs = []
                 
-                # Each user has a chance to have sessions based on persona
-                for user in users:
+                # Weekend = less traffic
+                is_weekend = day_start.weekday() >= 5
+                weekend_mult = self.consumer.get("weekend_multiplier", 0.3) if is_weekend else 1.0
+                
+                # Add new users for the day
+                before_count = len(users)
+                next_uid = self.add_new_users(users, day_start, next_uid)
+                new_today = len(users) - before_count
+                total_new += new_today
+                
+                # Count active users for today
+                active_users = [u for u in users if self.is_user_active(u, day_start)]
+                
+                # Each active user has a chance to have sessions based on persona
+                for user in active_users:
                     persona_id = user["persona"]
                     rate_mult = self._get_persona_attr(persona_id, "activity", "request_rate_multiplier") or 1.0
                     pattern = self._get_persona_attr(persona_id, "activity", "active_hours_pattern") or "work_hours"
                     burstiness = self._get_persona_attr(persona_id, "activity", "burstiness") or 0.3
                     
-                    # Determine number of sessions for this user today
-                    # Base: 0-2 sessions, modified by rate multiplier
-                    base_sessions = self.rng.poisson(0.5 * rate_mult)
-                    
-                    # Add bursty behavior
+                    base_sessions = self.rng.poisson(0.5 * rate_mult * weekend_mult)
                     if self.rng.random() < burstiness:
-                        base_sessions += int(self.rng.integers(1, 4))
+                        base_sessions += int(self.rng.integers(1, 3))
                     
-                    for _ in range(min(base_sessions, 10)):  # Cap at 10 sessions/day
+                    for _ in range(min(base_sessions, 10)):
                         second_of_day = sample_time_of_day(self.rng, pattern)
                         session_start = day_start + timedelta(seconds=second_of_day)
-                        
                         session_logs = self.generate_session(user, session_start)
                         day_logs.extend(session_logs)
                 
-                # Sort by timestamp and write
+                # Add random noise requests
+                noise_logs = self.generate_noise_requests(day_start, len(active_users))
+                day_logs.extend(noise_logs)
+                
+                # Apply churn at end of each day
+                churned_today = self.apply_daily_churn(users, day_start)
+                total_churned += churned_today
+                
+                # Sort by timestamp
                 day_logs.sort(key=lambda x: x["timestamp"])
                 w.writerows(day_logs)
                 total_logs += len(day_logs)
-                print(f"    Day {day_offset + 1}: {len(day_logs)} log entries")
+                day_type = "weekend" if is_weekend else "weekday"
+                print(f"    Day {day_offset + 1} ({day_type}): {len(day_logs)} logs, {len(active_users)} active")
         
         print(f"  Generated {total_logs} log entries -> {logs_csv}")
+        print(f"  User lifecycle: {starting_count} starting + {total_new} new - {total_churned} churned = {len([u for u in users if u['churned_at'] is None])} remaining")
         
-        # Write manifest
+        # Write users CSV
+        users_csv = os.path.join(self.out_dir, "dim_users.csv")
+        with open(users_csv, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["user_id", "created_at", "churned_at", "country", "persona", "is_internal", "device_primary"])
+            w.writeheader()
+            w.writerows(users)
+        print(f"  Generated {len(users)} users -> {users_csv}")
+        
+        # write aggregated manifest
         manifest = {
             "users_csv": users_csv,
             "logs_csv": logs_csv,
@@ -397,6 +499,7 @@ def init_db():
       CREATE TABLE IF NOT EXISTS dim_users (
         user_id BIGINT PRIMARY KEY,
         created_at TIMESTAMPTZ NOT NULL,
+        churned_at TIMESTAMPTZ,
         country TEXT NOT NULL,
         persona TEXT NOT NULL,
         is_internal BOOLEAN NOT NULL,
@@ -416,11 +519,7 @@ def init_db():
         status_code INT,
         latency_ms INT NOT NULL,
         region TEXT NOT NULL,
-        device TEXT NOT NULL,
-        persona TEXT NOT NULL,
-        stage TEXT NOT NULL,
-        attempt INT NOT NULL,
-        is_malformed BOOLEAN NOT NULL
+        device TEXT NOT NULL
       );
     """)
     conn.commit()
