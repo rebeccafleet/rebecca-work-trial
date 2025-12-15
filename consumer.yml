@@ -1,0 +1,206 @@
+schema_version: 1
+rng_seed: 1337
+
+runtime:
+  timezone: "America/New_York"
+  start: "2025-12-08T00:00:00"
+  duration_days: 7
+  tick_seconds: 60
+
+topology:
+  regions:
+    - id: us-east
+      weight: 0.7
+      utc_offset_hours: -5
+    - id: eu-west
+      weight: 0.3
+      utc_offset_hours: 1
+
+users:
+  count: 500
+  internal_user_rate: 0.02
+  countries:
+    US: 0.70
+    CA: 0.10
+    UK: 0.10
+    IN: 0.10
+
+traffic_sources:
+  - id: browser
+    share_of_traffic: 0.85
+    active_hours_pattern: work_hours
+    requests_per_user_per_hour: 0.6
+    percent_requests_with_user: 0.97
+
+  - id: api_integrator
+    share_of_traffic: 0.1
+    active_hours_pattern: always_on
+    requests_per_user_per_hour: 0.25
+    percent_requests_with_user: 0.35
+    retry:
+      retry_rate: 0.1
+      max_attempts: 3
+
+  - id: bot
+    share_of_traffic: 0.05
+    active_hours_pattern: always_on
+    requests_per_user_per_hour: 4.0
+    percent_requests_with_user: 0.10
+
+system:
+  services:
+    - name: web
+      routes:
+        - id: home
+          method: GET
+          path: /
+          weight: 1.0
+          base_latency_ms: 200
+          base_error_rate: 0.001
+          stage: browse
+
+        - id: search_results
+          method: GET
+          path: /search
+          weight: 1.0
+          base_latency_ms: 200
+          base_error_rate: 0.01
+          stage: browse
+
+        - id: listing
+          method: GET
+          path: /listing/:listing_id
+          weight: 1.0
+          base_latency_ms: 200
+          base_error_rate: 0.012
+          stage: browse
+
+    - name: api
+      routes:
+        - id: price_quote
+          method: POST
+          path: /api/quotes
+          weight: 1.0
+          base_latency_ms: 300
+          base_error_rate: 0.02
+          stage: intent
+
+        - id: hold_inventory
+          method: POST
+          path: /api/holds
+          weight: 1.0
+          base_latency_ms: 300
+          base_error_rate: 0.03
+          stage: checkout
+
+        - id: create_booking
+          method: POST
+          path: /api/bookings
+          weight: 1.0
+          base_latency_ms: 300
+          base_error_rate: 0.03
+          stage: checkout
+
+        - id: cancel_booking
+          method: POST
+          path: /api/bookings/:booking_id/cancel
+          weight: 1.0
+          base_latency_ms: 300
+          base_error_rate: 0.02
+          stage: post_booking
+
+    - name: payments
+      routes:
+        - id: create_payment_intent
+          method: POST
+          path: /payments/intents
+          weight: 1.0
+          base_latency_ms: 600
+          base_error_rate: 0.04
+          stage: payment
+
+        - id: confirm_payment
+          method: POST
+          path: /payments/confirm
+          weight: 1.0
+          base_latency_ms: 600
+          base_error_rate: 0.05
+          stage: payment
+
+    - name: fraud
+      routes:
+        - id: risk_score
+          method: POST
+          path: /fraud/score
+          weight: 1.0
+          base_latency_ms: 600
+          base_error_rate: 0.02
+          stage: checkout
+
+        - id: risk_decision
+          method: POST
+          path: /fraud/decision
+          weight: 1.0
+          base_latency_ms: 300
+          base_error_rate: 0.01
+          stage: checkout
+
+    - name: notifications
+      routes:
+        - id: send_email
+          method: POST
+          path: /notify/email
+          weight: 1.0
+          base_latency_ms: 300
+          base_error_rate: 0.03
+          stage: post_booking
+
+journeys:
+  stages: [browse, intent, checkout, payment, post_booking]
+
+  transitions:
+    browse:
+      browse: 0.8
+      intent: 0.15
+      end: 0.05
+
+    intent:
+      browse: 0.40
+      checkout: 0.40
+      end: 0.2
+
+    checkout:
+      payment: 0.60
+      browse: 0.10
+      end: 0.30
+
+    payment:
+      post_booking: 0.85
+      payment: 0.05    # retry / additional attempt
+      end: 0.10
+
+    post_booking:
+      post_booking: 0.15
+      end: 0.85
+
+  steps_per_stage:
+    browse: { min: 1, max: 5 }
+    intent: { min: 1, max: 2 }
+    checkout: { min: 2, max: 4 }
+    payment: { min: 1, max: 2 }
+    post_booking: { min: 1, max: 2 }
+
+feature_flags:
+  - key: new_fraud_model_v2
+    rollout: 0.25
+    scope: user
+    effects:
+      route_overrides:
+        fraud.risk_score:
+          latency_multiplier: 1.15
+      fraud_decision:
+        extra_decline_rate: 0.04
+
+output:
+  out_dir: "./out"
+  include_metadata: true

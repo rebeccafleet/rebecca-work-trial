@@ -1,0 +1,83 @@
+schema_version: 1
+
+personas:
+  - id: regular
+    share_of_users: 0.78
+
+    activity:
+      request_rate_multiplier: 1.0
+      active_hours_pattern: work_hours
+      burstiness: 0.3  # 0.1 (higher = more spiky)
+
+    identity:
+      auth_rate: 0.97
+      device_mix: { web: 0.7, mobile: 0.3 }
+
+    quality:
+      retry_multiplier: 1.0
+      timeout_multiplier: 1.0
+      malformed_log_rate: 0.0005
+
+  - id: power_user
+    share_of_users: 0.1
+
+    activity:
+      request_rate_multiplier: 1.5
+      active_hours_pattern: evening_peak
+      burstiness: 0.4
+
+    identity:
+      auth_rate: 0.99
+      device_mix: { web: 0.55, mobile: 0.45 }
+
+    quality:
+      retry_multiplier: 0.9
+      timeout_multiplier: 0.9
+      malformed_log_rate: 0.0003
+
+  - id: low_engagement
+    share_of_users: 0.10
+
+    activity:
+      request_rate_multiplier: 0.2
+      active_hours_pattern: work_hours
+      burstiness: 0.3
+
+    identity:
+      auth_rate: 0.95
+      device_mix: { web: 0.8, mobile: 0.2 }
+
+    quality:
+      retry_multiplier: 1.1
+      timeout_multiplier: 1.1
+      malformed_log_rate: 0.0008
+
+  - id: bot_like
+    share_of_users: 0.02
+
+    activity:
+      request_rate_multiplier: 6.0
+      active_hours_pattern: always_on
+      burstiness: 0.9
+
+    identity:
+      auth_rate: 0.8
+      device_mix: { web: 1.0, mobile: 0.0 }
+
+    quality:
+      retry_multiplier: 1.4
+      timeout_multiplier: 1.3
+      malformed_log_rate: 0.01
+
+defaults:
+  activity:
+    request_rate_multiplier: 1.0
+    active_hours_pattern: always_on
+    burstiness: 0.3
+  identity:
+    auth_rate: 0.95
+    device_mix: { web: 0.7, mobile: 0.3 }
+  quality:
+    retry_multiplier: 1.0
+    timeout_multiplier: 1.0
+    malformed_log_rate: 0.0005

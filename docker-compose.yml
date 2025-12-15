@@ -1,0 +1,26 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  jupyter:
+    image: jupyter/scipy-notebook:python-3.11
+    environment:
+      DATABASE_URL: postgresql://app:app@db:5432/app
+      JUPYTER_TOKEN: dev
+    ports:
+      - "8888:8888"
+    working_dir: /home/jovyan/work
+    volumes:
+      - ./:/home/jovyan/work
+    command: ["bash", "-lc", "pip install pyyaml numpy psycopg2-binary pandas && start-notebook.py --NotebookApp.token=dev --NotebookApp.password=''"]
+
+volumes:
+  pgdata:
