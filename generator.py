@@ -213,8 +213,9 @@ class ApplicationLogGenerator:
         return users
     
     def add_new_users(self, users: list, day: datetime, next_uid: int) -> int:
-        new_per_day = self.consumer["users"].get("new_users_per_day", 0)
-        
+        new_per_day_rate = self.consumer["users"].get("new_users_per_day_rate", 0.02)
+        new_per_day = int(len(users) * new_per_day_rate)
+
         for _ in range(new_per_day):
             # New user signs up at a random time during the day
             signup_time = day + timedelta(seconds=sample_time_of_day(self.rng, "work_hours"))
@@ -252,14 +253,14 @@ class ApplicationLogGenerator:
         if user["churned_at"] is not None:
             churned = datetime.fromisoformat(user["churned_at"])
             if churned.date() <= day.date():
-                return False  # already churned
+                return False
         
         return True
     
-    def generate_noise_requests(self, day_start: datetime, active_user_count: int) -> list:
-        """Generate random standalone API calls as noise."""
+    def generate_noise_requests(self, day_start: datetime, active_users: list, existing_sessions: list) -> list:
+        """Generate random standalone API calls as noise - looks like real traffic."""
         noise_pct = self.noise.get("random_requests_rate", 0.2)
-        noise_count = int(active_user_count * noise_pct)
+        noise_count = int(len(active_users) * noise_pct)
         error_rate = self.noise.get("random_error_rate", 0.2)
         
         logs = []
@@ -268,11 +269,21 @@ class ApplicationLogGenerator:
             region = self._pick_region()
             ts = day_start + timedelta(seconds=int(self.rng.integers(0, 86400)))
             
+            # Pick a real user to make it look authentic
+            user = active_users[int(self.rng.integers(0, len(active_users)))]
+            device_mix = self._get_persona_attr(user["persona"], "identity", "device_mix") or {"web": 0.7, "mobile": 0.3}
+            
+            # 30% chance to reuse an existing session (creates realistic overlap)
+            if existing_sessions and self.rng.random() < 0.3:
+                session_id = existing_sessions[int(self.rng.integers(0, len(existing_sessions)))]
+            else:
+                session_id = str(uuid.uuid4())[:8]
+            
             logs.append({
                 "request_id": str(uuid.uuid4()),
                 "timestamp": ts.isoformat(),
-                "user_id": None,
-                "session_id": "noise",
+                "user_id": user["user_id"],
+                "session_id": session_id,
                 "service": route["service"],
                 "route_id": route["id"],
                 "method": route["method"],
@@ -280,7 +291,7 @@ class ApplicationLogGenerator:
                 "status_code": generate_status_code(self.rng, error_rate),
                 "latency_ms": apply_latency_jitter(self.rng, route["base_latency_ms"]),
                 "region": region["id"],
-                "device": "unknown",
+                "device": weighted_choice(self.rng, device_mix),
             })
         return logs
     
@@ -372,14 +383,14 @@ class ApplicationLogGenerator:
                 # Advance time between requests in session
                 current_time += timedelta(seconds=int(self.rng.integers(1, 30)))
             
-            # Transition to next stage
             current_stage = self._next_stage(current_stage)
         
         return logs
     
     def generate(self):
         starting_count = self.consumer["users"].get("starting_count", self.consumer["users"].get("count", 100))
-        new_per_day = self.consumer["users"].get("new_users_per_day", 0)
+        new_per_day_rate = self.consumer["users"].get("new_users_per_day_rate", 0.02)
+        new_per_day = int(starting_count * new_per_day_rate)
         
         print(f"Generating application logs...")
         print(f"  Duration: {self.duration_days} days starting {self.start.date()}")
@@ -440,8 +451,9 @@ class ApplicationLogGenerator:
                         session_logs = self.generate_session(user, session_start)
                         day_logs.extend(session_logs)
                 
-                # Add random noise requests
-                noise_logs = self.generate_noise_requests(day_start, len(active_users))
+                # Add random noise requests (with session overlap)
+                existing_sessions = list(set(log["session_id"] for log in day_logs))
+                noise_logs = self.generate_noise_requests(day_start, active_users, existing_sessions)
                 day_logs.extend(noise_logs)
                 
                 # Apply churn at end of each day

@@ -18,7 +18,7 @@ topology:
 
 users:
   starting_count: 500
-  new_users_per_day: 100
+  new_users_per_day_rate: 0.05
   # daily probability of churning (modified by persona)
   base_churn_rate: 0.02
   internal_user_rate: 0.02
