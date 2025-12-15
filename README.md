@@ -24,6 +24,6 @@ Output goes to `./out/` with CSVs for iteration visibility:
 - `manifest.json` - generation metadata
 
 ## Sample output
-<img width="1229" height="721" alt="image" src="https://github.com/user-attachments/assets/81234cc7-c43a-4b18-b084-b8bf75f52ca5" />
-<img width="1090" height="246" alt="image" src="https://github.com/user-attachments/assets/7eab0c46-ba20-4caa-8f70-6e325670eaa4" />
+<img width="1090" height="246" alt="image" src="https://github.com/user-attachments/assets/455e1d40-2040-4ec4-bc97-86865385f2e9" />
+<img width="1217" height="698" alt="image" src="https://github.com/user-attachments/assets/c27355cd-b06a-41bd-a90f-121e647ca0cf" />
 
